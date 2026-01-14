@@ -26,12 +26,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps (force clean)
-  run: |
-    python -m pip install --upgrade pip
-    pip cache purge
-    pip uninstall -y mediapipe || true
-    pip install --no-cache-dir -r requirements.txt
-
+        run: |
+          python -m pip install --upgrade pip
+          pip cache purge
+          pip uninstall -y mediapipe || true
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Sanity check MediaPipe
         run: |
@@ -46,3 +45,8 @@ jobs:
         with:
           name: visia_output
           path: ${{ inputs.output_name }}
+      
+      - name: Verify MediaPipe import
+        run: |
+          python -c "import mediapipe as mp; print('mp', mp.__version__); print('has solutions', hasattr(mp,'solutions')); print('file', mp.__file__)"
+
