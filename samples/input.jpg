@@ -1,0 +1,36 @@
+name: Run VISIA Filter
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_path:
+        description: "Path to input image in the repo (e.g. samples/input.jpg)"
+        required: true
+        default: "samples/input.jpg"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run analysis
+        run: |
+          python -m visia_filter.cli "${{ inputs.image_path }}" -o analysis_panel.png
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis_output
+          path: analysis_panel.png
