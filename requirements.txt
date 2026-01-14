@@ -1,5 +1,4 @@
-opencv-python
-mediapipe
+opencv-python-headless
 numpy
-gradio
+mediapipe==0.10.14
 
