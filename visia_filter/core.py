@@ -179,6 +179,47 @@ def _overlay_mask(base_bgr, mask_u8, color=(0, 255, 255), alpha=0.35):
 
 def _normalize_heat(gray_u8):
     return _normalize_0_255(gray_u8)
+    def compute_uv_spots_visia_approx(bgr: np.ndarray, skin_mask: np.ndarray):
+    """
+    VISIA-like UV Spots approximation from a single RGB photo.
+    Returns:
+      uv_bg_u8: grayscale 0-255 background (negative look)
+      uv_spots_bin: binary mask for yellow dots
+    """
+    mask = (skin_mask > 0).astype(np.uint8)
+
+    # 1) grayscale
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    # 2) illumination correction (remove large-scale lighting)
+    blur_big = cv2.GaussianBlur(gray, (0, 0), 18)
+    corrected = cv2.subtract(gray, blur_big)
+    corrected = cv2.normalize(corrected, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    # 3) local contrast enhancement
+    clahe = cv2.createCLAHE(clipLimit=2.6, tileGridSize=(8, 8))
+    enhanced = clahe.apply(corrected)
+
+    # 4) background negative look (VISIA-ish)
+    uv_bg = 255 - enhanced
+    uv_bg = (uv_bg * mask).astype(np.uint8)
+
+    # 5) spot candidate map: Difference of Gaussians (blob emphasis)
+    g1 = cv2.GaussianBlur(enhanced, (0, 0), 1.1)
+    g2 = cv2.GaussianBlur(enhanced, (0, 0), 3.0)
+    dog = cv2.subtract(g2, g1)
+    dog = cv2.normalize(dog, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    dog = (dog * mask).astype(np.uint8)
+
+    # 6) threshold using percentile (more "device-like" than OTSU)
+    vals = dog[mask > 0]
+    thr = int(np.percentile(vals, 92)) if vals.size else 200
+    _, spots_bin = cv2.threshold(dog, thr, 255, cv2.THRESH_BINARY)
+
+    # 7) cleanup
+    spots_bin = cv2.morphologyEx(spots_bin, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8), iterations=1)
+
+    return uv_bg, spots_bin
 
 
 def make_panel(bgr: np.ndarray, skin_mask: np.ndarray, res: AnalysisResult) -> np.ndarray:
@@ -193,12 +234,14 @@ def make_panel(bgr: np.ndarray, skin_mask: np.ndarray, res: AnalysisResult) -> n
             else:
                 tile = _overlay_mask(tile, overlay_mask_u8, color=tint_color, alpha=0.35)
         if heat_u8 is not None:
-            hm = cv2.applyColorMap(_normalize_heat(heat_u8), cv2.COLORMAP_JET)
-            tile = cv2.addWeighted(tile, 0.55, hm, 0.45, 0)
+            # If heat_u8 is grayscale, keep VISIA-like BW look (no JET colormap)
+                heat_norm = _normalize_heat(heat_u8)
+            if len(heat_norm.shape) == 2:
+                 hm = cv2.cvtColor(heat_norm, cv2.COLOR_GRAY2BGR)
+            else:
+                 hm = cv2.applyColorMap(heat_norm, cv2.COLORMAP_JET)
+                 tile = cv2.addWeighted(tile, 0.55, hm, 0.45, 0)
 
-        cv2.rectangle(tile, (0, 0), (tile.shape[1], 36), (10, 10, 10), -1)
-        cv2.putText(tile, title, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
-        return tile
 
     # Top row
     t1 = make_tile(f"Spots ({int(res.spots.sum()/255)})", res.spots, tint_color=(0, 255, 255), mode="dots")
@@ -207,15 +250,14 @@ def make_panel(bgr: np.ndarray, skin_mask: np.ndarray, res: AnalysisResult) -> n
     t4 = make_tile(f"Pores ({int(res.pores.sum()/255)})", res.pores, tint_color=(255, 120, 0), mode="dots")
 
     # Bottom row (approx)
-    gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
-    uv_like = _normalize_0_255(255 - cv2.GaussianBlur(gray, (0, 0), 1.0))
-    uv_like = (uv_like * (skin_mask > 0)).astype(np.uint8)
+    uv_bg_u8, uv_spots_bin = compute_uv_spots_visia_approx(base, skin_mask)
 
     lab = cv2.cvtColor(base, cv2.COLOR_BGR2LAB)
     brown_like = _normalize_0_255(lab[:, :, 2])
     brown_like = (brown_like * (skin_mask > 0)).astype(np.uint8)
 
-    b1 = make_tile("UV Spots (approx)", heat_u8=uv_like)
+    b1 = make_tile("UV Spots (approx)", heat_u8=uv_bg_u8)
+    b1 = _overlay_points(b1, uv_spots_bin, color=(0, 255, 255), alpha=0.9)
     b2 = make_tile("Brown Spots (approx)", heat_u8=brown_like)
     b3 = make_tile(f"Red Areas ({int(res.red_areas.sum()/255)})", res.red_areas, tint_color=(0, 0, 255), mode="mask")
     b4 = make_tile(f"Porphyrins (approx) ({int(res.porphyrin.sum()/255)})", res.porphyrin, tint_color=(255, 0, 255), mode="mask")
